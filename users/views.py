@@ -4,17 +4,54 @@ from rest_framework.views import APIView
 from rest_framework import status, filters
 from rest_framework.decorators import action
 from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import IsAuthenticated, AllowAny
+from rest_framework.exceptions import AuthenticationFailed
 from django_filters.rest_framework import DjangoFilterBackend
 from .models import User, Transaction, Book
 from .serializers import UserSerializer, TransactionSerializer, BookSerializer
 from datetime import datetime, timedelta
+import jwt, datetime
+from django.http import Http404
 
 # Create your views here.
 
+#LOGIN VIEWS
+class LoginView(APIView):
+
+  def post(self, request):
+    email = request.data.get('email')
+    password = request.data.get('password')
+
+    if not email or not password:
+      return Response({"error": "Email and password are required."}, status=400)
+
+    user = User.objects.filter(email=email).first()
+
+    if user is None:
+      raise AuthenticationFailed('User not found.')
+    
+    if not user.check_password(password):
+      raise AuthenticationFailed('Incorrect password!')
+    
+    payload = {
+      'id': user.id,
+      'exp': datetime.datetime.utcnow() + datetime.timedelta(minutes=60),
+      'iat': datetime.datetime.utcnow()
+    }
+
+    token = jwt.encode(payload, 'secret', algorithm='HS256').decode('utf-8')
+
+    response = Response()
+    response.set_cookie(key='jwt', value=token, httponly=True)
+    response.data = {
+       'jwt': token
+    }
+
+    return response
+
 #USER VIEWS
 class UserListCreateAPIView(APIView):
-    #permission_classes = [IsAuthenticated]
+    #permission_classes = [AllowAny]
 
     def get(self, request):
         users = User.objects.all()
@@ -92,7 +129,7 @@ class BookListCreateAPIView(APIView):
 
 
 class BookDetailAPIView(APIView):
-  permission_classes = [IsAuthenticated]
+  #permission_classes = [IsAuthenticated]
 
   def get(self, request, pk):
     book = get_object_or_404(Book, pk=pk)
@@ -114,10 +151,14 @@ class BookDetailAPIView(APIView):
 
 
 class BookCheckoutAPIView(APIView):
-  permission_classes = [IsAuthenticated]
+  #permission_classes = [IsAuthenticated]
 
   def post(self, request, pk):
-    book = get_object_or_404(Book, pk=pk)
+    try:
+      book = Book.objects.get(pk=pk)
+    except Book.DoesNotExist:
+      raise Http404("Book not found")
+    
     user = request.user
 
     # Check if user already has this book checked out
@@ -142,7 +183,7 @@ class BookCheckoutAPIView(APIView):
     # Create checkout transaction
     due_date = datetime.now().date() + timedelta(days=14)
     Transaction.objects.create(
-      user=user,
+      user=request.user,
       book=book,
       transaction_type=Transaction.CHECKOUT,
       due_date=due_date
@@ -156,7 +197,7 @@ class BookCheckoutAPIView(APIView):
 
 
 class BookReturnAPIView(APIView):
-  permission_classes = [IsAuthenticated]
+  #permission_classes = [IsAuthenticated]
 
   def post(self, request, pk):
     book = get_object_or_404(Book, pk=pk)
